@@ -22,6 +22,8 @@ import copy
 import functools
 import os
 
+import pdb
+
 import tensorflow as tf
 
 from object_detection import eval_util
@@ -418,6 +420,15 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False):
           original_image_spatial_shapes=original_image_spatial_shapes,
           true_image_shapes=true_image_shapes)
 
+
+#================================================================================================
+
+      # Hey Javad !
+
+      #pdb.set_trace()
+
+
+#================================================================================================
       if class_agnostic:
         category_index = label_map_util.create_class_agnostic_category_index()
       else:
@@ -487,7 +498,13 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False):
   return model_fn
 
 
-def create_estimator_and_inputs(run_config,
+def create_estimator_and_inputs(Unlabeled_set_length,
+				Active_set_length,
+				epochs,
+		                data_info,
+				FLAGS,
+				restart_cycle,
+				run_config,
                                 hparams,
                                 pipeline_config_path,
                                 config_override=None,
@@ -564,16 +581,20 @@ def create_estimator_and_inputs(run_config,
 
   configs = get_configs_from_pipeline_file(pipeline_config_path,
                                            config_override=config_override)
+
   kwargs.update({
       'train_steps': train_steps,
       'sample_1_of_n_eval_examples': sample_1_of_n_eval_examples
   })
+
+
   if override_eval_num_epochs:
     kwargs.update({'eval_num_epochs': 1})
     tf.logging.warning(
         'Forced number of epochs for all eval validations to be 1.')
   configs = merge_external_params_with_configs(
       configs, hparams, kwargs_dict=kwargs)
+
   model_config = configs['model']
   train_config = configs['train_config']
   train_input_config = configs['train_input_config']
@@ -582,6 +603,41 @@ def create_estimator_and_inputs(run_config,
   eval_on_train_input_config = copy.deepcopy(train_input_config)
   eval_on_train_input_config.sample_1_of_n_examples = (
       sample_1_of_n_eval_on_train_examples)
+
+#============================================================================================
+
+  # Overriding variables in proto file 
+
+  # TRAINING SETTING  
+  # Load active set from cycle 0 and point to right model
+  if restart_cycle==0:
+        model_dir = FLAGS.model_dir + 'R' + FLAGS.run + 'cycle0/'
+        train_config.fine_tune_checkpoint = model_dir + 'model.ckpt'
+  else:
+        model_dir = FLAGS.model_dir + name + 'R' + FLAGS.run + 'cycle' + str(restart_cycle) + '/'
+        # Get actual checkpoint model
+        with open(model_dir+'checkpoint','r') as cfile:
+            line = cfile.readlines()
+            train_config.fine_tune_checkpoint = line[0].split(' ')[1][1:-2]
+
+  input_config = configs['train_input_config']
+  input_config.tf_record_input_reader.input_path[0] = data_info['output_path']
+  # Set number of steps based on epochs
+  train_config.num_steps = epochs*Active_set_length
+  # Reducing learning	
+  train_config.optimizer.momentum_optimizer.learning_rate.manual_step_learning_rate.schedule[0].step= int(0.5*epochs*Active_set_length)
+  train_config.optimizer.momentum_optimizer.learning_rate.manual_step_learning_rate.schedule[1].step= int(0.75*epochs*Active_set_length)
+
+
+  #EVALUATION SETTING
+  eval_input_configs[0].tf_record_input_reader.input_path[0] = data_info['output_path']
+  eval_config.num_examples = Unlabeled_set_length
+
+
+
+#============================================================================================
+
+
   if override_eval_num_epochs and eval_on_train_input_config.num_epochs != 1:
     tf.logging.warning('Expected number of evaluation epochs is 1, but '
                        'instead encountered `eval_on_train_input_config'
